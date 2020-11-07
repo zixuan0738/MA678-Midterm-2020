@@ -236,7 +236,7 @@ Please clearly state your conclusion and the implication of the result.
 
 
 The model I use is:$Score = 8.368e-01+ 2.409e-05*Reviews-6.965e-03*FrequencyPerMonth-9.303e-04*Average Cost-5.586e-03*Arrive Time+8.454e-01*Ratings$. 
-This is a linear regression model that I found out is the best fit for my dataset. By looking at the heatmap in EDA part, we can see that all numeric variables does not have a high correlation between each other. Even though r-square is close to 0 but the p-value is not so significant, I dont think that it's an optimal model for the effect size. I need to find more restaurant to increase my data, in order to have a better effect size of my model. One reason to cause my model turn out this way might be that I did not chose the best scoring algorithm. If given more time, I will choose another scoring function to better fit my model.
+This is a linear regression model that I found out is the best fit for my dataset. By looking at the heatmap in EDA part, we can see that all numeric variables does not have a high correlation between each other. Even though r-square is close to 1 but the p-value is not so significant, I dont think that it's an optimal model for the effect size. I need to find more restaurant to increase my data size, in order to have a better effect size of my model. One reason to cause my model turn out this way might be that I did not chose the best scoring algorithm. If given more time, I will choose another scoring function to better fit my model.
 
 
 
