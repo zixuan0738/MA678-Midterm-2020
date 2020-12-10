@@ -1,0 +1,475 @@
+---
+title: "Statistical Learning and Bankruptcy Prediction"
+author: "Zixuan Liu (zliu203)"
+date: "NOV 24 2020"
+output:
+  html_document:
+    df_print: paged
+subtitle: MA678 Midterm Project
+---
+# 1. Abstract
+
+The dataset is about bankruptcy prediction of Polish companies. The data was collected from Emerging Markets Information Service, which is a database containing information on emerging markets around the world. The bankrupt companies were analyzed in the period 2000-2012, while the still operating companies were evaluated from 2007 to 2013.
+
+
+# 2. Introduction 
+
+### 2.1 Question
+Prediction of firm bankruptcies have been extensively studied in the field of accounting to monitor the financial performance by all shareholders. Especially I want to start my own business after graduate. I want to find out the change that I will success to build my own company. The aim of this project is to examine the relationships between these parameters and develop an effective multilevel model to assess how these measurement correlated with the firm bankruptcies.
+
+### 2.2 Data Source and Description
+The dataset I use is called `Polish Companies Bankruptcy Data Set` which is hosted by UCI Machine Learning Repository and collected from EMIS, a database containing information on emerging markets around the world. The bankrupt companies were analyzed in the period 2000-2012, while the still operating companies were evaluated from 2007 to 2013. In this project, I will use partial data called `3year` for bankruptcy prediction. It contains financial rates from 3rd year of the forecasting period and corresponding class label that indicates bankruptcy status after 3 years.  
+The data `3year` contain contains 64 variables and 10503 observations in total. The dependent variable is the class variables with levels 0 or 1, indicating the company bankruptcy or not. Some variables as financial ratio could affect the company be classified as bankruptcy or not. For example, the first variable is "net profit/total assets" which is return on assets (ROA), a financial ratio that shows the percentage of profit a company earns in relation to its overall resources. It is possible that the higher the ROA, the less likely the company will be bankrupt.
+
+# 3. Methods
+
+## 3.1 Missing Values & Data Preprocessing
+
+### 3.1.1 Missing Values
+
+First I conduct basic data preprocessing. Missing values for dataset are shown in the histogram below.
+```{r, include = FALSE}
+# install and load packages
+pkg_list = c('ggplot2', 'tidyr', 'stringr', 'dplyr', 'foreign', 'knitr',
+             'naniar','gridExtra','DMwR','caret', 'glmnet', 'tree',
+             'randomForest','MASS', 'e1071', 'devtools', 'reshape2', 'neuralnet')
+to_install_pkgs = pkg_list[!(pkg_list %in% installed.packages()[,"Package"])]
+if(length(to_install_pkgs)) {
+  install.packages(to_install_pkgs, repos = "https://cloud.r-project.org")
+}
+sapply(pkg_list, require, character.only = TRUE)
+# Sets default chunk options
+knitr::opts_chunk$set(
+  fig.align = "center", 
+  echo = FALSE, 
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  error = TRUE
+)
+
+# devtools::install_github("kassambara/factoextra")
+library(factoextra)
+```
+```{r check_missings}
+year3 = foreign::read.arff("C:/Users/49431/Downloads/3year.arff")
+year3[year3 == "?"] = NA
+# observations contains NA
+# sum(!complete.cases(year3))
+num3 = complete.cases(year3)
+missing = data.frame(year3)
+#rownames(missing) = 'missing values'
+gg_miss_var(missing) + theme(text = element_text(size=7)) +
+  ylab('Number of Missing Values in Each Variable')
+```
+
+The plot above shows that attr 37 has the highest missing value.
+Due to the large number of missing values in each dataset, completely delete missing values will result to a large amount of data loss. Thus, I use variable means to replace missing values. I also drop the first variable `id` and factorize variable `class`. 
+
+```{r replace_missing_values}
+asNumeric = function(x){
+ as.numeric(as.character(x))
+}
+factorsNumeric = function(d){
+  modifyList(d, lapply(d[, sapply(d, is.factor)],asNumeric))
+}
+year3 = factorsNumeric(year3)
+for(i in 1:(ncol(year3)-1)){
+  year3[is.na(year3[,i]), i] <- mean(year3[,i], na.rm = TRUE)
+}
+year3$class = as.factor(year3$class)
+```
+###  3.1.2 Heatmap
+
+Shown in below is a correlation map for the year 2010 data that decribes the relationship between the different features. 
+
+```{r heatmap}
+library(reshape2)
+#heatmap plot year3
+temp3 = year3[-65]
+cormat <- round(cor(temp3),2)
+melted_cormat <- melt(cormat)
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+upper_tri <- get_upper_tri(cormat)
+# Melt the correlation matrix
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+# Create a ggheatmap
+ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+    name="Pearson\nCorrelation") +
+  theme_minimal()+ # minimal theme
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed() + ggtitle("year2010")
+# Print the heatmap
+ggheatmap + 
+theme(axis.text.x = element_text(size=4),
+      axis.text.y = element_text(size=4),
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5)) +
+  scale_y_discrete(position = "right")
+```
+
+I can find that attr 2 (total liabilities/ total assets) and attr 10 (Equity/ total assets) have highlist negative correlation. Then I noticed that $$Assets = Liabilities + Owner's Equity$$ which can explain correlation that if total assets are keep same, when liabilities are increased, equity must be decreased.
+
+## 3.2 Fitting model
+
+
+```{r}
+set.seed(1)
+index = createDataPartition(year3$class,p=0.8,list=F)
+train = year3[index,]
+test = year3[-index,]
+```
+
+### 3.2.1 PCA
+
+Principal Component Analysis (PCA) is a useful tool for exploratory data analysis which is a dimensionality reduction or data compression method and can select a subset of variables from a larger set, based on the highest correlations variables.  I want to use PCA to find a direction that displays the largest variance from the variables.
+
+```{r}
+# year3.pca = prcomp(year3.oversampled[,-ncol(year3.oversampled)], center=TRUE, scale = TRUE)
+# fviz_eig(year3.pca)
+```
+
+```{r}
+install.packages(factoextra)
+library(factoextra)
+train.pca = prcomp(train[,-ncol(train)], center=TRUE, scale = TRUE)
+fviz_eig(train.pca)
+```
+
+As the plot showa above, although the first three principal components are much more influential than others, PC1 only explains around 25% of the variance which is not as higher as normal dataset. As I know that anything above 30% is a good loading, My data show a lowly correlated and I cannot find The largest variance by using PCA.
+
+### 3.2.2 Residuals
+In my models, ***Class*** is the response variable, 0 means the firm did not bankrupt; 1 means that the firm bankrupt. Then I took logistic mixed-effect model for this data.
+The model can be write as:  fit1 = glm(class~., data = train_1_resample,family = "binomial")
+
+```{r, echo=FALSE}
+library(caTools)
+#year3
+set.seed(123)
+year3$spl=sample.split(year3[,1],SplitRatio=0.8)
+train_3=subset(year3, year3$spl==TRUE)
+test_3=subset(year3, year3$spl==FALSE)
+
+year3$spl = NULL
+train_3$spl = NULL
+test_3$spl = NULL
+
+train.x_3 = train_3[,-65]  
+train.y_3 = train_3[,65]
+
+test.x_3 = test_3[,-65]
+test.y_3 = test_3[,65]
+```
+
+
+To check the fitted models, plot the residuals for my model.
+```{r echo=FALSE}
+#model1 = lm(class ~ Attr1+ Attr22+ Attr7+ Attr14+ Attr35, data = year3)
+#display(model1)
+#a = mean(year3[-65])
+#binnedplot(a, year3$classs, main="Binned residual plot for model 1")
+
+set.seed(123)
+train_1_resample <- SMOTE(class ~ ., train_3, perc.over = 100, perc.under=200)
+fit1 = glm(class~., data = train_1_resample,family = "binomial")
+par(mfrow = c(2, 2))  # Split the plotting panel into a 2 x 2 grid
+plot(fit1)
+
+
+library(arm)
+binnedplot(fitted(fit1),resid(fit1,type="response"))
+
+```
+
+
+# 4. Results
+I want to look at my Diagnostic Plots individually.
+I don't think the residuals vs fitted plot show that my model is good, because that there are no obvious pattern in this plot. most of the points are around 0 and there are few that's are over 800.
+
+By looking at the normal QQ plot, We can see this plot shows that the residuals are normally distributed, since the residuals are lined well on the straight dashed line.
+
+The scale-location plot shows the residuals are not spread equally alone the ranges of predictors. The red line is not horizontal and it's not randomly spread points.
+
+In residuals vs leverage plot, this plot is far beyond the Cook’s distance lines (the other residuals appear clustered on the left because the second plot is scaled to show larger area than the first plot). 
+
+Based on the above plots, I don't think my model is appropriate to fit the data since the average residuals does not have an regular pattern. This might due to I averaged out the missing value, or might because that I delete one variable since it has a huge amount of missing value. If I got more time, It will be interesting to figure it out why the model does not seem so good, and I want to apply some prediction for the data to test out whether the firm will bankrupt or not.
+
+In terms of classification method. I included Principal Component Analysis (PCA) for classification. I used PCA to find the most influential components and use them to lower dimensions and hence improve model accuracy. Besides, in terms of tuning parameters, since I only consider parameters in the range of 1 to 10, I also expanded the grid and investigate more on variance-bias trade off issue.
+
+# 5. Discussion
+
+## 5.1 Obstacle
+The biggest obstacle in the project is cleaning missing values. As listed in the previous section, the dataset include a great number of missing values. Thus, how to deal with missing value is the major task in data reprocessing. I believe there would be substantial loss in data if I simply delete all missing values. In this project, I finally used mean approach to substitute each missing value with the mean of the corresponding variable. There are still other approaches which can be applied to resolve missing values, such as K Nearest Neighbor. 
+
+## 5.2 Future work
+In terms of classification methods, there are a lot of other methods can be considered and investigated. For example, I can include Principle Component Analysis (PCA) for classification. I can use PCA to find the most influential components and use them to lower dimensions and hence improve model accuracy. Besides, in terms of tuning parameters, since I only consider parameters in the range of 1 to 10, I can also expand the grid and investigate more on variance-bias trade issue in the future. Meanwhile, considering missing values, as I stated before, there are also other approaches can be applied including K Nearest Neighbors. 
+
+## 5.3 Reference 
+
+[1] Sudheer Chava and Robert A. Jarrow, Bankruptcy Prediction with Industry Effects, Review of Finance 8: 537-569, 2004, http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.495.4409&rep=rep1&type=pdf  
+
+[2] Sunarira Ashraf and Elisabete, Do Traditional Financial Distress Prediction Models Predict the Early Warning Signs of Financial Distress?, Volume 11, Issue 5, June 1994, Pages 545-557, https://doi.org/10.1016/0167-9236(94)90024-8  
+
+[3] Sai Surya Teja Maddikonda and Sree Keerthi Matta, Bankruptcy Prediction: Mining the Polish Bankruptcy Data, https://github.com/smaddikonda/Bankruptcy-Prediction/blob/master/Bankruptcy% 20Prediction%20Report.pdf   
+
+[4] Polish Companies Bankruptcy Data Set, UCI Machine Learning Repository,http://archive.ics.uci.edu/ ml/datasets/Polish+companies+bankruptcy+data  
+
+
+<!-- Force a new page -->
+\newpage
+
+# 6. Appendix
+
+## 6.1 Imbalance Data
+
+### 6.1.1 Pie Chart 
+
+I did a pie chart to show the imbalance in response variable
+
+```{r pie_imbalance}
+draw = function(num1, num2){
+  type <- c('0 Not Bankrupcy','1 Bankrupcy')
+  nums <- c(num1,num2)
+  df = data.frame(type = type, nums = nums)
+  p <- ggplot(data = df, mapping = aes(x = 'Content', y = nums, fill = type)) + 
+    geom_bar(stat='identity', position = 'stack', width = 1)
+  label_value = paste('(', round(df$nums/sum(df$nums) * 100, 1), '%)', sep = '')
+  label = paste(df$type, label_value, sep = '')
+  p + coord_polar(theta = 'y') + labs(x = '', y = '', title = '') + 
+    theme(axis.text = element_blank()) + theme(axis.ticks = element_blank()) + 
+    scale_fill_discrete(labels = label)
+}
+par(mfrow=c(2,3))
+p3 = draw(table(year3$class)[1],table(year3$class)[2]) + ggtitle("Year3")
+grid.arrange(p3, nrow = 3)
+```
+
+The pie charts above show that the data is imbalanced. It has `0` with above 95.3%. The I used the SMOTE method to oversimple the minority group and achieve a more balanced dataset. 
+
+### 6.1.2 SMOTE Algorithm For Unbalanced Classification
+
+Synthetic Minority Oversampling Technique (SMOTE) is a widely used oversampling technique. I used SMOTE algorithm to creates artificial data based on feature space similarities from minority samples and achieve a more balanced dataset.First I took the difference between the feature vector and its nearest neighbor, than Multiplied this difference by a random number between 0 and 1, and added it to the feature vector under consideration. Finally I chose a random point along the line segment between two specific features to get the new balanced data set: 5445 Bankrupt instances and 7425 Non-bankrupt instances.
+
+```{r}
+# original data
+kable(table(year3$class), col.names = c('Bankruptcy', 'Frequency'), align = 'c')
+```
+
+
+```{r}
+# oversampling 
+year3.oversampled = SMOTE(class~.,year3,perc.over=1000, k = 40, perc.under = 150)
+kable(table(year3.oversampled$class), col.names = c('Bankruptcy', 'Frequency'), align = 'c')
+```
+
+### 6.2 Split data
+
+To build classification models, I splited  dataset into training and testing dataset by split ratio = 0.8. I first use training data to fit various classification models, and then use testing data to make predictions and calculate model accuracy. I take Year 2010 dataset as an example. 
+
+```{r}
+set.seed(1)
+index = createDataPartition(year3.oversampled$class,p=0.8,list=F)
+train = year3.oversampled[index,]
+test = year3.oversampled[-index,]
+```
+
+
+## 6.3 Ridge Regression and Cross Validation
+
+In Ridge and Lasso regressions, I will used loss function:
+$$\sum_{i=1}^n(y_i-\beta_0-\sum_j^p\beta_j x_{ij})^2+(1-\alpha)\lambda\sum_{j}^p\beta_j^2+\alpha\lambda\sum_j^p|\beta_j|$$
+
+I will use built-in cross-validation function: cv.glmnet() to choose the turning $\lambda$. Since the choice of the cross-validation folds is random, I set a random seed at first. And in 'glmnet' function, I will use $$alpha = 0$$ to determines the regression model:
+$$\sum_{i=1}^n(y_i-\beta_0-\sum_j^p\beta_j x_{ij})^2+\lambda\sum_{j}^p\beta_j^2$$
+
+```{r}
+set.seed(1)
+ridge_cv=cv.glmnet(as.matrix(train[,-ncol(train)]),
+                   y = factor(train$class),
+                   alpha = 0, 
+                   family = 'binomial')
+par(mfrow = c(1,2))
+plot(ridge_cv)
+plot(ridge_cv$glmnet.fit, "lambda")
+bestlam_ridge = ridge_cv$lambda.min
+bestlam_ridge
+```
+
+The left plot shows the training mean squared error as the function of $\lambda$. The second plot shows the coefficients for different values of $\lambda$ and it shows that when $\lambda$ becomes larger, the coefficients are tend towards 0 . I also see that the value of $\lambda$ which results in the smallest cross-validation error is 0.009847234
+I also create a class predictions table based on the predicted probability of bankruptcy. If probability is greater than 0.5, it will show 1, otherwise will show 0.
+
+```{r}
+ridge_pred = predict(ridge_cv,
+                     newx = as.matrix(test[,-ncol(test)]),
+                     s = bestlam_ridge,
+                     type = 'response')
+
+pred_ridge = ifelse(ridge_pred >= 0.5, 1, 0)
+
+table3 = table(pred_ridge, test$class)
+rownames(table3) = c('Predicted 0','Predicted 1')
+colnames(table3) = c('Actual 0', 'Actual 1')
+
+kable(table3)
+
+error.ridge = sum(pred_ridge!=test$class)/length(pred_ridge)
+```
+
+The calculated error rate is `r error.ridge * 100`%.
+
+## 6.4 Lasso Regression and Cross Validation
+
+In lasso regression, I want to test if the lasso can yield either a more accurate or a more interpretable model than ridge regression. I will also use the loss function and cv.glmnet to fit model, and in this time, I will use the argument $$alpha = 1$$. I will fit the lasso regression model:
+$$\sum_{i=1}^n(y_i-\beta_0-\sum_j^p\beta_j x_{ij})^2+\lambda\sum_j^p|\beta_j|$$
+
+
+```{r, error=FALSE}
+lasso_cv = cv.glmnet(model.matrix(class~., data=train)[,-1],
+                   y = factor(train$class),
+                   alpha = 1, 
+                   family = 'binomial')
+```
+
+```{r}
+par(mfrow = c(1,2))
+plot(lasso_cv)
+plot(lasso_cv$glmnet.fit, "lambda")
+bestlam_lasso = lasso_cv$lambda.min
+bestlam_lasso
+```
+
+These two plots show how $\lambda$ changes the mean squared error and the coefficients for different ??. And I can see that 2.274839e-05 is the smallest cross-validation error for ??.
+
+```{r}
+lasso_pred = predict(lasso_cv,
+                     newx = model.matrix(class~., data=test)[,-1],
+                     type = 'response')
+pred_lasso = ifelse(lasso_pred > 0.5, 1, 0)
+
+table4 = table(pred_lasso, test$class)
+rownames(table4) = c('Predicted 0','Predicted 1')
+colnames(table4) = c('Actual 0', 'Actual 1')
+
+kable(table4)
+
+error.lasso = sum(pred_lasso!=test$class)/length(pred_lasso)
+
+```
+
+The calculated error rate is `r error.lasso * 100`%.
+
+
+
+## 6.5 Decision Tree
+
+Decision tree is a non-parametric supervised learning method that recursively partition the feature space into hyper-rectangular subsets, and make prediction on each subset. I created a decision tree model to predict the response `class`: whether the company goes bankrupt or not, using all 64 attributes in the Polish Bankruptcy dataset. The model learns simple decision rules inferred from the 64 attributes. My decision tree model gives equal weights to all 64 attributes and use Gini indices as measure of quality of the splits. The model uses "Attr27" "Attr13" "Attr34" "Attr21" "Attr58" "Attr39" "Attr6"  "Attr26" "Attr29" "Attr59" in the actual model built with `Attr27` as the root node, which features profit on operating activities / financial expenses of each company. The daughter nodes of the root node, `Attr21` and `Attr26`, represents sales in current year / sales in the previous year, and (net profit + depreciation) / total liabilities, respectively.  
+
+```{r}
+tree.full = tree(class ~ ., train)
+plot(tree.full)
+text(tree.full,pretty = 0)
+```
+
+Before pruning, the confusion matrix of my tree model is
+
+```{r}
+tree.pred.full = predict(tree.full, test, type = 'class')
+table7 = table(tree.pred.full,test$class)
+rownames(table7) = c('Predicted 0','Predicted 1')
+colnames(table7) = c('Actual 0', 'Actual 1')
+kable(table7)
+```
+
+The error rate is:
+
+```{r}
+tree.error = sum(tree.pred.full != test$class)/length(tree.pred.full)
+tree.error
+```
+
+I then consider using cross-validation to prune the tree, and the optimal tree size stays at 14, which gives us the same model I had.
+
+```{r}
+set.seed(1)
+tree.cv = cv.tree(tree.full,FUN=prune.misclass)
+plot(tree.cv$size,tree.cv$dev,type = 'b', 
+     xlab = 'Tree Size', 
+     ylab = 'Tree Deviation',
+     main = 'Tree with Cross Validation')
+```
+
+## 6.6 Random Forests
+
+A random forest is a mega estimator that fits a number of decision tree classifiers. Trees are built with randomly selected subsets of features and the best split within the chosen subset is used for these trees. The randomness in this tree-building method yields larger bias and smaller variance due to averaging, and the decrease in variance would overcompensate the increase in bias. I consider different mtry, number of predictors considered at each split, from 1 to 15, and plot the errors. I find the testing error is minimized when mtry=13.
+
+```{r}
+# Set mtry using hyperparamter tuning
+oob.err = numeric(15)
+test.err = numeric(15)
+
+for(mtry in 1:15) {
+  rf.loop=randomForest(class~., data = train, 
+                       mtry=mtry, importance=TRUE) 
+  oob.err[mtry] = rf.loop$err.rate[nrow(rf.loop$err.rate),1]
+  
+  pred.loop=predict(rf.loop,newdata=test)
+  test.err[mtry]= sum(pred.loop!=test$class)/length(pred.loop)
+}
+```
+
+```{r}
+matplot(1:mtry, cbind(oob.err,test.err), pch=20 , col=c("red","blue"),type="b",ylab="Errors",
+        xlab="Number of Predictors Considered at each Split",
+        main = 'Random Forest: Test Error & OOB Error')
+legend("topright",legend=c("Out of Bag Error","Test Error"),pch=19, col=c("red","blue"))
+```
+
+The confusion matrix of my random forest model is as following:
+
+```{r}
+rf = randomForest(class~.,data = train, mtry=which.min(test.err),
+                  importance=TRUE)
+rf.pred = predict(rf,newdata = test)
+table8 = table(rf.pred, test$class)
+rownames(table8) = c('Predicted 0','Predicted 1')
+colnames(table8) = c('Actual 0', 'Actual 1')
+kable(table8)
+```
+```{r}
+error.forest = test.err[which.min(test.err)]
+error.forest
+```
+
+And the error rate is `r error.forest * 100`%. Not surprisingly, my random forest model outperforms my decision tree model. In fact, this is the most accurate model among all methods I used.
+
+
+
+The histogram report the error rates of the 6 models that I have wxperimented with. then I get the result: Random Forests has the smallest error rate which is the best bankruptcy model in my project.
+In Random Forest model, top 3 important features are Attr27 (profit on operating activities / financial expenses), Attr21 (sales in this year / sales in last year ) and attr24 (gross profit (in 3 years) / total assets). I can make the conclusion that activitis' profit, the quantity of sales and gross profit are the decisive factors for the company bankruptcy
+```{r}
+
+error = data.frame(rbind(error.ridge, error.lasso, tree.error, error.forest))
+colnames(error) = 'error'
+ggplot(error,aes(x = c( 'Ridge', 'Lasso', 'Tree','Forest') ,y = error))+ geom_bar(stat="identity") + theme(axis.title.x = element_blank(),
+  axis.title.y = element_blank())  + ggtitle("error")
+
+
+```
+From the results shown above, I can conclude that the best classification method is Random Forest.
