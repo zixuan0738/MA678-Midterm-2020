@@ -15,6 +15,6 @@ Hi welcome to my 678 midterm project page!
 
 [Sai Surya Teja Maddikonda and Sree Keerthi Matta, Bankruptcy Prediction: Mining the Polish Bankruptcy Data](https://github.com/smaddikonda/Bankruptcy-Prediction/blob/master/Bankruptcy% 20Prediction%20Report.pdf)
 
-[Polish Companies Bankruptcy Data Set, UCI Machine Learning Repository](http://archive.ics.uci.edu/ ml/datasets/Polish+companies+bankruptcy+data)
+[Polish Companies Bankruptcy Data Set, UCI Machine Learning Repository](http://archive.ics.uci.edu/ml/datasets/Polish+companies+bankruptcy+data)
 
 Lastly, I just wanted to take this extra space to say thank you to the graders for taking the time out of your day to go through all of these documents! I hope you have a great day!
